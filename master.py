@@ -19,6 +19,7 @@ readline.parse_and_bind('set editing-mode emacs')
 cmds = [
     ["sendregs", 3, "<register> <data>: Send <data> to <register(s)>"],
     ["readregs", 3, "<register> <len>: Read data from <register>"],
+    ["sendreg", 3, "<register> [0x]<2bytesasWord>: Send single byte to <register>"],
     ["help", 0, ": This help"],
     ["stop", 0, ": Exit Program"],
     ]
@@ -95,38 +96,43 @@ def do_sendregs(devnum, parmlist):
         import pdb; pdb.set_trace()
     return
 
+def do_sendreg(devnum, parmlist):
+    # parms = <regnum> <single_word> in dec or hex (if "0x" prepended)
+    baseConv = 10
+    print("-- do_sendreg: DEV({}), WORD({})".format(devnum, repr(parmlist)))
+    try:
+        regnum = int(parmlist[0])
+    except:
+        print("<register> can only be a number");
+        return
+
+    singleWord_s = parmlist[1]
+    if singleWord_s.startswith("0x"):
+        baseConv = 16
+        singleWord_s = singleWord_s[2:]
+    try:
+        singleWord = int(singleWord_s, baseConv)
+    except ValueError:
+        print("<singleWord> can only be a dec or hex (0x) number")
+        return
+
+    # Set up new Instrument
+    instrument = minimalmodbus.Instrument('/dev/rs485', devnum)
+    instrument.serial.baudrate = 115200   # Baud
+    instrument.debug = True
+    try:
+        instrument.write_bit(regnum, singleWord)
+    except IOError as e:
+        print("*** IO Error: ", e)
+    return
+
+
 def do_readregs(device, parmlist):
     print("do_readregs: DEV({}), PARMS({})".format(device, repr(parmlist)))
     return
 
 
 
-
-"""
-    print('ENTERED: {!r}'.format(line))
-    # Format is 1 number address, space, string to send
-    mo=re.match(r'^([0-9]+)\s+(.*)$', line)
-    if not mo:
-        print("Error in input, format = 'devnum string to send'",
-              file=sys.stderr);
-        continue
-
-    try:
-        devnum = int(mo.group(1))
-    except:
-        print("Invalid device address: {}, can only use int".
-            format(mo.group(1)))
-        continue
-    print("Device address is ", devnum)
-    sendString = mo.group(2)
-    if not(len(sendString)):
-        print("String len must be more than 0", file=sys.stderr);
-        continue
-    try:
-        instrument.write_string_flex(devnum, sendString)
-    except IOError as e:
-        print("IO Error: ", e, file=sys.stderr)
-"""
 
 
 if __name__ == '__main__':
