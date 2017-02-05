@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 # scripts/example/simple_rtu_client.py
 #
-import fcntl
-import struct
 from serial import Serial, PARITY_NONE
 import sys
-import copy
 import logging
 from umodbus import log
 from logging import getLogger
@@ -103,9 +100,9 @@ def main ():
     serial_port.close()
 
 if __name__ == '__main__':
-    try:
+    # try:
         main()
-    except:
+    # except:
         pass
-        import pdb;
-        pdb.xpm()
+        # import pdb;
+        # pdb.xpm()
