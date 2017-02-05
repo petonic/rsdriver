@@ -35,6 +35,11 @@ cmds = [
 cmdArgs = None
 
 def main():
+    # Print out initial commands
+    for i in cmds:
+        print("{}{} {}".format(
+                i[0], " <device>" if i[1] else "", i[2]))
+
     while True:
         line = input('master: <cmd> <dev> [<opt_data>] ("stop" to quit, ? = help): ')
         if line == 'stop':
