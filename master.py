@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0,"/home/pi/rsrpi/umodbus")
 
 from serial import Serial, PARITY_NONE
+import serial
 import logging
 from umodbus import log
 from logging import getLogger
@@ -35,6 +36,7 @@ baud=9600
 rsdev="/dev/rs485"
 
 
+
 def get_serial_port():
     """ Return serial.Serial instance, ready to use for RS485."""
     port = Serial(port=rsdev, baudrate=baud, parity=PARITY_NONE,
@@ -56,6 +58,8 @@ cmds = [
     ["sendregs", 3, "<register> <data>: Send <data> to <register(s)>"],
     ["readregs", 3, "<register> <len>: Read data from <register>"],
     ["sendreg", 3, "<register> [0x]<2bytesasWord>: Send single byte to <register>"],
+    ['bread', 0, "Reads any queued bytes from serial device, timeout 1 sec"],
+    ['bcheck', 0, "Displays how many chars are waiting in serial buffer"],
     ["help", 0, ": This help"],
     ["stop", 0, ": Exit Program"],
     ]
@@ -94,9 +98,14 @@ def main():
                         i[0], " <device>" if i[1] else "", i[2]))
             continue
 
+        # FIXME: Get a better, more modular parsing routine, but this hack
+        # will work for not.
+        lineArr = line.split(' ',2)
+        import pdb; pdb.set_trace()
         try:
             (cmd, device_s, remainder) = line.split(" ", 2)
         except ValueError:
+            import pdb; pdb.set_trace()
             print("Not enough arguments provided")
             continue
 
@@ -132,6 +141,53 @@ def main():
 
         getattr(sys.modules[__name__], "do_%s" % cmd)(device, cmdArgs)
 
+def do_bread(devnum, parmlist):
+    """ Reads any outstanding bytes on the serial device (if any).
+    Timeout is hardcoded to 1 second, and it'll only read up to 255 bytes.
+    :param devnum: Modbus Device number as int.
+    :param parmlist: Ignored but must be present because of how we dispatch
+    """
+    global serial_port
+    import hexdump
+
+    if (serial.in_waiting):
+        print("bread: have %d bytes in waiting"%serial.in_waiting)
+    else:
+        return
+
+    oldTimeout = serial_port.timeout()
+    serial_port.timeout(1.0)        # Temp timeout
+
+    try:
+        buff = serial_port.read(serial.in_waiting)
+    except:
+        e = sys.exec_info()[0]
+        print("bread: Unexpected error getting what's mine: %s"%
+                repr(e))
+        serial_port.timeout(oldTimeout)
+        return
+
+    serial_port.timeout(oldTimeout)
+    outstring = hexdump.hexdump(buff, result='return')
+    print("{:08x}: {}".format( buffpos, outstring[10:]))
+
+def do_bcheck(devnum, parmlist):
+    """ Reports on any outstanding bytes on the serial device.
+    Timeout is hardcoded to 1 second.
+    :param devnum: Modbus Device number as int.
+    :param parmlist: Ignored but must be present because of how we dispatch
+    """
+    global serial_port
+
+    if (serial_port.in_waiting):
+        print("bread: have %d bytes in waiting"%serial.in_waiting)
+    return
+
+
+
+
+
+
 def do_sendregs(devnum, parmlist):
     # parms = <regnum as int> <stringdata as string>
     try:
@@ -158,8 +214,8 @@ def do_sendregs(devnum, parmlist):
         print("Some other exception: %"%repr(e))
         sys.exit(3)
 
-    print("Got a response back!");
-    import pdb; pdb.set_trace()
+    # print("Got a response back!");
+    # import pdb; pdb.set_trace()
 
     return
 
@@ -209,6 +265,28 @@ def do_readregs(device, parmlist):
     # print("do_readregs: DEV({}), PARMS({})".format(device, repr(parmlist)))
     return
 
+def string2list(string, pad="\x00"):
+    """ Packs a Python string into a list of ushorts so that uModbus
+    functions can use them.  Since each Modbus register is 2 bytes
+    (big-endian) it can hold 2 characters, so if the string is odd number
+    in length.  It will be padded by the PAD character.
+
+    :param string: String to be converted to a packed Struct.
+    :param pad: Character to padd odd numbered length strings, default = 0x00
+    :return: List of UNSIGNED SHORTS.
+    """
+    # Break the input string into a list of 2 char strings
+    charList = [string[i:i + 2] for i in range(0, len(string), 2)]
+    if len(string) % 2:
+      # if it's an odd numbered length, append the PAD to the last element
+      charList[-1] += str(pad)
+
+    retList = []
+
+    for i in charList:
+      retList.append((ord(i[0]) << 8) + ord(i[1]))
+    # import pdb; pdb.set_trace()
+    return retList
 
 
 

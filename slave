@@ -16,10 +16,20 @@ from umodbus.server.serial import get_server
 from umodbus.server.serial.rtu import RTUServer
 from umodbus.utils import log_to_stream
 import logging
-log_to_stream(level=logging.DEBUG)
+
+########################################################
+# Set up logging
+########################################################
+########################################################
+
+from logging import getLogger
+log = getLogger('uModbus')
+log.setLevel(logging.DEBUG)
+log_to_stream(stream=sys.stderr, level=logging.DEBUG)
+log.debug("Logging is set to debug")
 
 
-s = Serial('/dev/rs485', baudrate=115200)
+s = Serial('/dev/rs485', baudrate=9600)
 s.timeout = 10
 
 data_store = defaultdict(int)
@@ -41,7 +51,7 @@ def write_data_store(slave_id, function_code, address, value):
     print("Got a read_data_store({}, {}, {}, {})".
           format(slave_id, function_code, address, value))
 
-@app.route(slave_ids=[1], function_codes=[0x06], addresses=list(range(0,250)))
+@app.route(slave_ids=[1], function_codes=[6,16], addresses=list(range(0,250)))
 def write_data_store(slave_id, function_code, address, value):
     """" Set value for address. """
     data_store[address] = value

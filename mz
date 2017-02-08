@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+#
+# This is a simple driver program acting in master mode.
+#
+#
+
+# Override system installation for development purposes.
+import sys
+sys.path.insert(0,"/home/pi/rsrpi/umodbus")
+
+from serial import Serial, PARITY_NONE
+import serial
+import logging
+from umodbus import log
+from logging import getLogger
+import readline
+import logging
+from umodbus.client.serial import rtu
+from umodbus.utils import log_to_stream
+import re
+import cmd, sys
+import shlex
+import hexdump
+
+
+ignore_timeouts = True
+
+########################################################
+# Set up logging
+########################################################
+log = getLogger('uModbus')
+log.setLevel(logging.DEBUG)
+# logformats: https://docs.python.org/3/library/logging.html#logrecord-attributes
+log_to_stream(stream=sys.stderr, level=logging.DEBUG,
+              fmt='******* %(asctime)s: %(levelname)s: %(filename)s(%(lineno)d): %(funcName)s: %(message)s')
+log.debug("Logging is set to debug")
+
+
+baud=9600
+rsdev="/dev/rs485"
+
+
+import os.path
+try:
+    import readline
+except ImportError:
+    readline = None
+
+histfile = os.path.expanduser('~/.rsmasterhist')
+histfile_size = 1000
+
+
+
+def get_serial_port():
+    """ Return serial.Serial instance, ready to use for RS485."""
+    port = Serial(port=rsdev, baudrate=baud, parity=PARITY_NONE,
+                  stopbits=1, bytesize=8, timeout=1)
+
+    fh = port.fileno()
+    port.timeout = 3.0      # XXX: Try to get the first response.
+
+    # A struct with configuration for serial port.
+    # serial_rs485 = struct.pack('hhhhhhhh', 1, 0, 0, 0, 0, 0, 0, 0)
+    # fcntl.ioctl(fh, 0x542F, serial_rs485)
+
+    return port
+
+
+serial_port = None
+
+
+class masterShell(cmd.Cmd):
+    """Command processor for driving RS-485 data down a line."""
+    global serial_port, histfile, histfile_size
+    intro = 'Welcome to the RS-4875 Driver Program'
+    prompt = '(RS-Master): '
+    file = "/home/pi/.rsmasterhist"
+
+    ########################################################
+    # Set up History File
+    ########################################################
+
+
+    def preloop(self):
+        if readline and os.path.exists(histfile):
+            readline.read_history_file(histfile)
+
+    def postloop(self):
+        if readline:
+            readline.set_history_length(histfile_size)
+            readline.write_history_file(histfile)
+
+    def precmd(self, line):
+        if readline:
+            readline.write_history_file(histfile)
+        return line
+
+
+    try:
+        serial_port = get_serial_port()
+    except:
+        e = sys.exec_info()[0]
+        print("Error opening serial port <{}>".format(repr(e)))
+        sys.exit(1)
+
+
+    def do_q(self, args):
+        return True
+    def do_stop(self, args):
+        return True
+    def do_quit(self, args):
+        return True
+    def do_EOF(self, args):
+        return True
+
+    def do_sendregs(self, args):
+        """sendregs <device(int)> <register(int)> <data(quoted-string)>
+        Send DATA to the REGISTER-bank on the DEVICE."""
+        argArray = shlex.split(args);
+        if len(argArray) < 3:
+            print("Need all of the arguments")
+            print("Syntax:\n\n%s\n\nreturning..."%self.do_sendregs.__doc__)
+            return False
+        (device, register, data) = (argArray[0], argArray[1],
+                                    ' '.join(argArray[2:]))
+        print("* got sendregs({}, {}, <{}>)".format(
+                device, register, data))
+        mb_sendregs(validateNum(device), validateNum(register), data)
+        return False
+
+    def do_sendreg(self, args):
+        """sendreg <device(int)> <register(int)> <value(quoted-string)>
+        Send a VALUE to the REGISTER-bank on the DEVICE.
+
+        VALUE can be decimal or hex ("0x...") but it is only
+        16 bits long."""
+        # Parse arguments, with two value formats (hex or dec)
+        argArray = shlex.split(args);
+        if len(argArray) < 3:
+            print("Need all of the arguments")
+            print("Syntax:\n\n%s\n\nreturning..."%self.do_sendreg.__doc__)
+            return False
+        (device, register, data) = (argArray[0], argArray[1],
+                                    ' '.join(argArray[2:]))
+        print("* got sendreg({}, {}, <{}>)".format(
+                device, register, data))
+        try:
+            device = validateNum(device)
+            register = validateNum(register)
+            data = validateNum(data)
+        except ValueError:
+            print("All three params must be numbers, ignoring...")
+            print("Syntax:\n\n%s\n\nreturning..."%self.do_sendreg.__doc__)
+            return False
+        if data > 65535:
+            print("Data must be a USHORT, ignoring.")
+            print("Syntax:\n\n%s\n\nreturning..."%self.do_sendreg.__doc__)
+            return False
+        mb_sendreg(device, register, data)
+        return False
+
+    def do_bread(self, args):
+        """bread
+        Reads any outstanding bytes on the serial device (if any).
+        Timeout is hardcoded to 1 second, and it'll only read up to 255 bytes.
+        """
+        global serial_port
+        import hexdump
+        if (serial_port.in_waiting):
+            print("bread: have %d bytes in the input buffer"%
+                  serial_port.in_waiting)
+        else:
+            print("bread: nothing in the input buffer")
+            return False
+        old_timeout = serial_port.timeout
+        serial_port.timeout = 1.0        # Temp timeout
+        try:
+            buff = serial_port.read(256)
+        except:
+            e = sys.exec_info()[0]
+            print("bread: Unexpected error getting what's mine: %s"%
+                    repr(e))
+            serial_port.timeout = old_timeout
+            return
+        serial_port.timeout = old_timeout
+        outstring = hexdump.hexdump(buff, result='return')
+        print(outstring)
+        return False
+
+    def do_bcheck(self, args):
+        """bcheck
+        Reports on any outstanding bytes on the serial device.
+        """
+        global serial_port
+        if (serial_port.in_waiting):
+            print("bread: have %d bytes in waiting"%serial_port.in_waiting)
+        else:
+            print("Nothing in the input buffer")
+            return False
+        print("Found %d bytes in the input buffer"%serial_port.in_waiting)
+        return False
+
+
+def validateNum(string):
+    """Support function that takes a string, parses it for any hexiness
+    (i.e., starts with "0x") and converts as necessary.
+    Returns the number."""
+    baseConv = 16 if string.startswith("0x") else 10
+    # This will raise its own ValueError if it's not a number
+    return int(string, baseConv)
+
+
+def mb_sendregs(device, register, data):
+    # Construct the ADU
+    global serial_port
+    valList = string2list(data)
+    message = rtu.write_multiple_registers(slave_id=device,
+            starting_address=register, values=valList)
+    # Send the ADU
+    log.debug("Timeout is set to {}".format(serial_port.timeout))
+    try:
+        response = rtu.send_message(message, serial_port, resp_len=8)
+    except TimeoutError:
+        if ignore_timeouts:
+            print("Timeout error, ignoring", file=sys.stderr)
+            return
+        print("Timeout error, aborting", file=sys.stderr)
+        sys.exit(1)
+    except:
+        e = sys.exc_info()[0]
+        print("Some other exception: {}".format(e))
+        sys.exit(3)
+    print("We requested sendregs(%d, %d, %s), got back %d, should be %d: %s"%
+          (device, register, hexdump.hexdump(data.encode()),
+           response, len(valList),
+           "ok" if len(valList) == response else "INCORRECT!"))
+
+def mb_sendreg(devnum, regnum, value):
+    # Construct the ADU
+    global serial_port
+    message = rtu.write_single_register(slave_id=devnum,
+            address=regnum,
+            value=value);
+    # Send the ADU
+    log.debug("Timeout is set to {}".format(serial_port.timeout))
+
+    # try:  # XXX: Just to debug the exception
+    response = rtu.send_message(message, serial_port, resp_len = 8)
+    # except TimeoutError:
+    #     if ignore_timeouts:
+    #         print("Timeout error, ignoring", file=sys.stderr)
+    #         return
+    #     print("Timeout error, aborting", file=sys.stderr)
+    #     sys.exit(1)
+    # except:
+    #     e = sys.exc_info()[0]
+    #     print("Some other exception: %s"%repr(e))
+    #     sys.exit(3)
+    # This function returns the value as a USHORT, not a string
+    print("We requested sendreg(%d, %d, %d), got back %d"%
+          (devnum, regnum, value, response))
+
+    # XXX: Debug because I'm so surprised I got a response.
+    # import pdb; pdb.set_trace()
+
+def string2list(string, pad="\x00"):
+    """ Packs a Python string into a list of ushorts so that uModbus
+    functions can use them.  Since each Modbus register is 2 bytes
+    (big-endian) it can hold 2 characters, so if the string is odd number
+    in length.  It will be padded by the PAD character.
+
+    :param string: String to be converted to a packed Struct.
+    :param pad: Character to padd odd numbered length strings, default = 0x00
+    :return: List of UNSIGNED SHORTS.
+    """
+    # Break the input string into a list of 2 char strings
+    charList = [string[i:i + 2] for i in range(0, len(string), 2)]
+    if len(string) % 2:
+      # if it's an odd numbered length, append the PAD to the last element
+      charList[-1] += str(pad)
+
+    retList = []
+
+    for i in charList:
+      retList.append((ord(i[0]) << 8) + ord(i[1]))
+    # import pdb; pdb.set_trace()
+    return retList
+
+
+if __name__ == '__main__':
+    from bdb import BdbQuit
+    try:
+        masterShell().cmdloop()
+    except (BdbQuit):
+        sys.exit(1)
+    except:
+        import pdb;
+        pdb.xpm()
